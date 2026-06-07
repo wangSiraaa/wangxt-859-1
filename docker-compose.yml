@@ -1,0 +1,18 @@
+services:
+  fumigation-api:
+    build: .
+    container_name: fumigation-approval-api
+    ports:
+      - "18080:18080"
+    environment:
+      - SPRING_PROFILES_ACTIVE=default
+      - FUMIGATION_MAX_PESTICIDE_DOSAGE=50
+      - FUMIGATION_REQUIRED_VENTILATION_HOURS=4
+      - FUMIGATION_ALLOWABLE_GAS_CONCENTRATION=0.5
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:18080/api/fumigation/tickets || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
