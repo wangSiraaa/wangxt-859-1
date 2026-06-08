@@ -10,6 +10,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
@@ -22,7 +23,7 @@ public class AuditLogService {
     @Autowired
     private AuditLogRepository auditLogRepository;
 
-    @Transactional
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public AuditLog createAuditLog(FumigationOperation operation,
                                    AuditOperationType operationType,
                                    OperationRole operatorRole,
@@ -65,5 +66,34 @@ public class AuditLogService {
 
     public List<AuditLog> getAllAuditLogs() {
         return auditLogRepository.findAll();
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public AuditLog createFailureAuditLog(Long operationId,
+                                          String ticketNo,
+                                          AuditOperationType operationType,
+                                          OperationRole operatorRole,
+                                          String operatorId,
+                                          String operatorName,
+                                          String operationDetail,
+                                          String beforeStatus,
+                                          String afterStatus,
+                                          String failureReason,
+                                          String ipAddress) {
+        AuditLog auditLog = new AuditLog();
+        auditLog.setOperationId(operationId);
+        auditLog.setTicketNo(ticketNo);
+        auditLog.setOperationType(operationType);
+        auditLog.setOperatorRole(operatorRole);
+        auditLog.setOperatorId(operatorId);
+        auditLog.setOperatorName(operatorName);
+        auditLog.setOperationDetail(operationDetail);
+        auditLog.setBeforeStatus(beforeStatus);
+        auditLog.setAfterStatus(afterStatus);
+        auditLog.setSuccess(false);
+        auditLog.setFailureReason(failureReason);
+        auditLog.setIpAddress(ipAddress);
+
+        return auditLogRepository.save(auditLog);
     }
 }

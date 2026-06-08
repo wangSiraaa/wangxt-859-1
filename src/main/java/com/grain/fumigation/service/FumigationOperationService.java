@@ -293,7 +293,18 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
-            throw new BusinessException(errorMsg);
+            BusinessException ex = new BusinessException(errorMsg);
+            ex.setOperationId(operation.getId());
+            ex.setTicketNo(operation.getTicketNo());
+            ex.setOperationType(AuditOperationType.APPLY_PESTICIDE);
+            ex.setOperatorRole(OperationRole.OPERATION_MANAGER);
+            ex.setOperatorId(request.getOperatorId());
+            ex.setOperatorName(request.getOperatorName());
+            ex.setBeforeStatus(operation.getStatus());
+            ex.setAfterStatus(operation.getStatus());
+            ex.setIpAddress(ipAddress);
+            ex.setAuditLogged(true);
+            throw ex;
         }
 
         BigDecimal maxDosage = fumigationConfig.getMaxPesticideDosage();
@@ -313,7 +324,18 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
-            throw new BusinessException(406, errorMsg);
+            BusinessException ex = new BusinessException(406, errorMsg);
+            ex.setOperationId(operation.getId());
+            ex.setTicketNo(operation.getTicketNo());
+            ex.setOperationType(AuditOperationType.APPLY_PESTICIDE);
+            ex.setOperatorRole(OperationRole.OPERATION_MANAGER);
+            ex.setOperatorId(request.getOperatorId());
+            ex.setOperatorName(request.getOperatorName());
+            ex.setBeforeStatus(operation.getStatus());
+            ex.setAfterStatus(operation.getStatus());
+            ex.setIpAddress(ipAddress);
+            ex.setAuditLogged(true);
+            throw ex;
         }
 
         OperationStatus beforeStatus = operation.getStatus();
@@ -468,7 +490,18 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
-            throw new BusinessException(errorMsg);
+            BusinessException ex = new BusinessException(errorMsg);
+            ex.setOperationId(operation.getId());
+            ex.setTicketNo(operation.getTicketNo());
+            ex.setOperationType(AuditOperationType.LIFT_ALERT);
+            ex.setOperatorRole(OperationRole.OPERATION_MANAGER);
+            ex.setOperatorId(request.getOperatorId());
+            ex.setOperatorName(request.getOperatorName());
+            ex.setBeforeStatus(operation.getStatus());
+            ex.setAfterStatus(operation.getStatus());
+            ex.setIpAddress(ipAddress);
+            ex.setAuditLogged(true);
+            throw ex;
         }
 
         OperationStatus beforeStatus = operation.getStatus();
@@ -526,6 +559,19 @@ public class FumigationOperationService {
         if (operation.getStatus() == OperationStatus.ALERT_LIFTED || 
             operation.getStatus() == OperationStatus.CANCELLED) {
             String errorMsg = String.format("当前状态[%s]不允许取消", operation.getStatus().getDescription());
+            auditLogService.createAuditLog(
+                    operation,
+                    AuditOperationType.CANCEL_TICKET,
+                    OperationRole.OPERATION_MANAGER,
+                    operatorId,
+                    operatorName,
+                    errorMsg,
+                    operation.getStatus(),
+                    operation.getStatus(),
+                    false,
+                    errorMsg,
+                    ipAddress
+            );
             throw new BusinessException(errorMsg);
         }
 

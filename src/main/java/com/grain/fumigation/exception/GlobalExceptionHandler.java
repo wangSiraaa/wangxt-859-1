@@ -1,8 +1,10 @@
 package com.grain.fumigation.exception;
 
 import com.grain.fumigation.dto.ApiResponse;
+import com.grain.fumigation.service.AuditLogService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.validation.BindException;
@@ -21,10 +23,37 @@ public class GlobalExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
+    @Autowired
+    private AuditLogService auditLogService;
+
     @ExceptionHandler(BusinessException.class)
     @ResponseStatus(HttpStatus.OK)
     public ApiResponse<Void> handleBusinessException(BusinessException e) {
         log.warn("业务异常: {}", e.getMessage());
+
+        if (!e.isAuditLogged() && e.getOperationType() != null && e.getOperatorId() != null) {
+            try {
+                String beforeStatus = e.getBeforeStatus() != null ? e.getBeforeStatus().name() : null;
+                String afterStatus = e.getAfterStatus() != null ? e.getAfterStatus().name() : null;
+                auditLogService.createFailureAuditLog(
+                        e.getOperationId(),
+                        e.getTicketNo(),
+                        e.getOperationType(),
+                        e.getOperatorRole(),
+                        e.getOperatorId(),
+                        e.getOperatorName(),
+                        e.getMessage(),
+                        beforeStatus,
+                        afterStatus,
+                        e.getMessage(),
+                        e.getIpAddress()
+                );
+                log.info("已记录失败操作审计日志: operationId={}, type={}", e.getOperationId(), e.getOperationType());
+            } catch (Exception auditEx) {
+                log.error("记录失败操作审计日志异常", auditEx);
+            }
+        }
+
         return ApiResponse.error(e.getCode(), e.getMessage());
     }
 
