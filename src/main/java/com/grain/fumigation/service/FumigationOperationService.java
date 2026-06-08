@@ -6,11 +6,13 @@ import com.grain.fumigation.entity.FumigationOperation;
 import com.grain.fumigation.enums.AuditOperationType;
 import com.grain.fumigation.enums.OperationRole;
 import com.grain.fumigation.enums.OperationStatus;
+import com.grain.fumigation.event.StatusChangedEvent;
 import com.grain.fumigation.exception.BusinessException;
 import com.grain.fumigation.repository.FumigationOperationRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -35,6 +37,9 @@ public class FumigationOperationService {
     @Autowired
     private FumigationConfig fumigationConfig;
 
+    @Autowired
+    private ApplicationEventPublisher eventPublisher;
+
     private final AtomicLong ticketCounter = new AtomicLong(0);
 
     private String generateTicketNo() {
@@ -42,6 +47,28 @@ public class FumigationOperationService {
         String dateStr = LocalDateTime.now().format(formatter);
         long seq = ticketCounter.incrementAndGet();
         return String.format("FUM%s%04d", dateStr, seq);
+    }
+
+    private void publishStatusEvent(FumigationOperation operation,
+                                    OperationStatus beforeStatus,
+                                    OperationStatus afterStatus,
+                                    AuditOperationType operationType,
+                                    OperationRole operatorRole,
+                                    String operatorId,
+                                    String operatorName,
+                                    boolean success,
+                                    String failureReason) {
+        try {
+            StatusChangedEvent event = new StatusChangedEvent(
+                    operation, beforeStatus, afterStatus, operationType,
+                    operatorRole, operatorId, operatorName, success, failureReason
+            );
+            eventPublisher.publishEvent(event);
+            log.info("状态变更事件已发布: operationId={}, before={}, after={}, success={}",
+                    operation.getId(), beforeStatus, afterStatus, success);
+        } catch (Exception e) {
+            log.error("发布状态变更事件失败", e);
+        }
     }
 
     @Transactional
@@ -82,12 +109,17 @@ public class FumigationOperationService {
                 ipAddress
         );
 
+        publishStatusEvent(operation, null, OperationStatus.DRAFT,
+                AuditOperationType.CREATE_TICKET, OperationRole.KEEPER,
+                request.getKeeperId(), request.getKeeperName(), true, null);
+
         return operation;
     }
 
     @Transactional
     public FumigationOperation submitTicket(SubmitTicketRequest request, String ipAddress) {
         FumigationOperation operation = getOperationById(request.getOperationId());
+        OperationStatus beforeStatus = operation.getStatus();
 
         if (operation.getStatus() != OperationStatus.DRAFT) {
             String errorMsg = String.format("当前状态[%s]不允许提交，仅草稿状态可提交", operation.getStatus().getDescription());
@@ -104,10 +136,12 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.SUBMIT_TICKET, OperationRole.KEEPER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
-        OperationStatus beforeStatus = operation.getStatus();
         operation.setStatus(OperationStatus.SUBMITTED);
         operation.setUpdateBy(request.getOperatorId());
         operation = operationRepository.save(operation);
@@ -127,12 +161,17 @@ public class FumigationOperationService {
                 ipAddress
         );
 
+        publishStatusEvent(operation, beforeStatus, OperationStatus.SUBMITTED,
+                AuditOperationType.SUBMIT_TICKET, OperationRole.KEEPER,
+                request.getOperatorId(), request.getOperatorName(), true, null);
+
         return operation;
     }
 
     @Transactional
     public FumigationOperation approveTicket(ApproveTicketRequest request, String ipAddress) {
         FumigationOperation operation = getOperationById(request.getOperationId());
+        OperationStatus beforeStatus = operation.getStatus();
 
         if (operation.getStatus() != OperationStatus.SUBMITTED) {
             String errorMsg = String.format("当前状态[%s]不允许审批", operation.getStatus().getDescription());
@@ -149,22 +188,27 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.APPROVE_TICKET, OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
-        OperationStatus beforeStatus = operation.getStatus();
         AuditOperationType auditType;
+        OperationStatus afterStatus;
 
         if (request.getApproved()) {
             operation.setStatus(OperationStatus.APPROVED);
             operation.setApproveRemark(request.getApproveRemark());
             operation.setApproveTime(LocalDateTime.now());
             auditType = AuditOperationType.APPROVE_TICKET;
+            afterStatus = OperationStatus.APPROVED;
         } else {
             operation.setStatus(OperationStatus.REJECTED);
             operation.setRejectReason(request.getRejectReason());
             operation.setApproveTime(LocalDateTime.now());
             auditType = AuditOperationType.REJECT_TICKET;
+            afterStatus = OperationStatus.REJECTED;
         }
         operation.setUpdateBy(request.getOperatorId());
         operation = operationRepository.save(operation);
@@ -180,11 +224,15 @@ public class FumigationOperationService {
                 request.getOperatorName(),
                 detail,
                 beforeStatus,
-                operation.getStatus(),
+                afterStatus,
                 true,
                 null,
                 ipAddress
         );
+
+        publishStatusEvent(operation, beforeStatus, afterStatus,
+                auditType, OperationRole.OPERATION_MANAGER,
+                request.getOperatorId(), request.getOperatorName(), true, null);
 
         return operation;
     }
@@ -192,6 +240,7 @@ public class FumigationOperationService {
     @Transactional
     public FumigationOperation confirmEvacuation(ConfirmEvacuationRequest request, String ipAddress) {
         FumigationOperation operation = getOperationById(request.getOperationId());
+        OperationStatus beforeStatus = operation.getStatus();
 
         if (operation.getStatus() != OperationStatus.APPROVED) {
             String errorMsg = String.format("当前状态[%s]不允许确认人员撤离，需审批通过后操作", operation.getStatus().getDescription());
@@ -208,6 +257,9 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.CONFIRM_EVACUATION, OperationRole.SAFETY_OFFICER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
@@ -226,10 +278,12 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.CONFIRM_EVACUATION, OperationRole.SAFETY_OFFICER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
-        OperationStatus beforeStatus = operation.getStatus();
         operation.setEvacuationConfirmed(true);
         operation.setEvacuationConfirmTime(LocalDateTime.now());
         operation.setEvacuationRemark(request.getEvacuationRemark());
@@ -253,12 +307,17 @@ public class FumigationOperationService {
                 ipAddress
         );
 
+        publishStatusEvent(operation, beforeStatus, OperationStatus.EVACUATION_CONFIRMED,
+                AuditOperationType.CONFIRM_EVACUATION, OperationRole.SAFETY_OFFICER,
+                request.getOperatorId(), request.getOperatorName(), true, null);
+
         return operation;
     }
 
     @Transactional
     public FumigationOperation applyPesticide(ApplyPesticideRequest request, String ipAddress) {
         FumigationOperation operation = getOperationById(request.getOperationId());
+        OperationStatus beforeStatus = operation.getStatus();
 
         if (operation.getStatus() != OperationStatus.EVACUATION_CONFIRMED) {
             String errorMsg = String.format("当前状态[%s]不允许投药，需人员撤离确认后操作", operation.getStatus().getDescription());
@@ -275,11 +334,14 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.APPLY_PESTICIDE, OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
         if (!Boolean.TRUE.equals(operation.getEvacuationConfirmed())) {
-            String errorMsg = "人员未撤离，不能投药！";
+            String errorMsg = "人员未撤离不能投药";
             auditLogService.createAuditLog(
                     operation,
                     AuditOperationType.APPLY_PESTICIDE,
@@ -293,6 +355,9 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.APPLY_PESTICIDE, OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             BusinessException ex = new BusinessException(errorMsg);
             ex.setOperationId(operation.getId());
             ex.setTicketNo(operation.getTicketNo());
@@ -324,6 +389,9 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.APPLY_PESTICIDE, OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             BusinessException ex = new BusinessException(406, errorMsg);
             ex.setOperationId(operation.getId());
             ex.setTicketNo(operation.getTicketNo());
@@ -338,7 +406,6 @@ public class FumigationOperationService {
             throw ex;
         }
 
-        OperationStatus beforeStatus = operation.getStatus();
         operation.setPesticideType(request.getPesticideType());
         operation.setPesticideDosage(request.getPesticideDosage());
         operation.setPesticideApplyTime(LocalDateTime.now());
@@ -363,12 +430,17 @@ public class FumigationOperationService {
                 ipAddress
         );
 
+        publishStatusEvent(operation, beforeStatus, OperationStatus.PESTICIDE_APPLIED,
+                AuditOperationType.APPLY_PESTICIDE, OperationRole.OPERATION_MANAGER,
+                request.getOperatorId(), request.getOperatorName(), true, null);
+
         return operation;
     }
 
     @Transactional
     public FumigationOperation ventilationDetection(VentilationRequest request, String ipAddress) {
         FumigationOperation operation = getOperationById(request.getOperationId());
+        OperationStatus beforeStatus = operation.getStatus();
 
         if (operation.getStatus() != OperationStatus.PESTICIDE_APPLIED) {
             String errorMsg = String.format("当前状态[%s]不允许通风检测，需投药完成后操作", operation.getStatus().getDescription());
@@ -385,6 +457,10 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    request.getVentilationPassed() ? AuditOperationType.COMPLETE_VENTILATION : AuditOperationType.START_VENTILATION,
+                    OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
@@ -414,10 +490,12 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.COMPLETE_VENTILATION, OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
-        OperationStatus beforeStatus = operation.getStatus();
         operation.setVentilationStartTime(startTime);
         operation.setVentilationEndTime(endTime);
         operation.setVentilationDurationHours(duration);
@@ -425,10 +503,16 @@ public class FumigationOperationService {
         operation.setVentilationPassed(request.getVentilationPassed());
         operation.setVentilationRemark(request.getVentilationRemark());
 
+        OperationStatus afterStatus;
+        AuditOperationType auditType;
         if (request.getVentilationPassed()) {
             operation.setStatus(OperationStatus.VENTILATION_COMPLETED);
+            afterStatus = OperationStatus.VENTILATION_COMPLETED;
+            auditType = AuditOperationType.COMPLETE_VENTILATION;
         } else {
             operation.setStatus(OperationStatus.VENTILATION_IN_PROGRESS);
+            afterStatus = OperationStatus.VENTILATION_IN_PROGRESS;
+            auditType = AuditOperationType.START_VENTILATION;
         }
         operation.setUpdateBy(request.getOperatorId());
         operation = operationRepository.save(operation);
@@ -438,17 +522,21 @@ public class FumigationOperationService {
                 duration, request.getGasConcentration(), result, request.getVentilationRemark());
         auditLogService.createAuditLog(
                 operation,
-                request.getVentilationPassed() ? AuditOperationType.COMPLETE_VENTILATION : AuditOperationType.START_VENTILATION,
+                auditType,
                 OperationRole.OPERATION_MANAGER,
                 request.getOperatorId(),
                 request.getOperatorName(),
                 detail,
                 beforeStatus,
-                operation.getStatus(),
+                afterStatus,
                 true,
                 null,
                 ipAddress
         );
+
+        publishStatusEvent(operation, beforeStatus, afterStatus,
+                auditType, OperationRole.OPERATION_MANAGER,
+                request.getOperatorId(), request.getOperatorName(), true, null);
 
         return operation;
     }
@@ -456,6 +544,7 @@ public class FumigationOperationService {
     @Transactional
     public FumigationOperation liftAlert(LiftAlertRequest request, String ipAddress) {
         FumigationOperation operation = getOperationById(request.getOperationId());
+        OperationStatus beforeStatus = operation.getStatus();
 
         if (operation.getStatus() != OperationStatus.VENTILATION_COMPLETED) {
             String errorMsg = String.format("当前状态[%s]不允许解除警戒，需通风检测合格后操作", operation.getStatus().getDescription());
@@ -472,6 +561,9 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.LIFT_ALERT, OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
@@ -490,6 +582,9 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.LIFT_ALERT, OperationRole.OPERATION_MANAGER,
+                    request.getOperatorId(), request.getOperatorName(), false, errorMsg);
             BusinessException ex = new BusinessException(errorMsg);
             ex.setOperationId(operation.getId());
             ex.setTicketNo(operation.getTicketNo());
@@ -504,7 +599,6 @@ public class FumigationOperationService {
             throw ex;
         }
 
-        OperationStatus beforeStatus = operation.getStatus();
         operation.setAlertLifted(true);
         operation.setAlertLiftTime(LocalDateTime.now());
         operation.setAlertLiftRemark(request.getAlertLiftRemark());
@@ -526,6 +620,10 @@ public class FumigationOperationService {
                 null,
                 ipAddress
         );
+
+        publishStatusEvent(operation, beforeStatus, OperationStatus.ALERT_LIFTED,
+                AuditOperationType.LIFT_ALERT, OperationRole.OPERATION_MANAGER,
+                request.getOperatorId(), request.getOperatorName(), true, null);
 
         return operation;
     }
@@ -555,6 +653,7 @@ public class FumigationOperationService {
     @Transactional
     public FumigationOperation cancelTicket(Long operationId, String operatorId, String operatorName, String ipAddress) {
         FumigationOperation operation = getOperationById(operationId);
+        OperationStatus beforeStatus = operation.getStatus();
 
         if (operation.getStatus() == OperationStatus.ALERT_LIFTED || 
             operation.getStatus() == OperationStatus.CANCELLED) {
@@ -572,10 +671,12 @@ public class FumigationOperationService {
                     errorMsg,
                     ipAddress
             );
+            publishStatusEvent(operation, beforeStatus, beforeStatus,
+                    AuditOperationType.CANCEL_TICKET, OperationRole.OPERATION_MANAGER,
+                    operatorId, operatorName, false, errorMsg);
             throw new BusinessException(errorMsg);
         }
 
-        OperationStatus beforeStatus = operation.getStatus();
         operation.setStatus(OperationStatus.CANCELLED);
         operation.setUpdateBy(operatorId);
         operation = operationRepository.save(operation);
@@ -594,6 +695,10 @@ public class FumigationOperationService {
                 null,
                 ipAddress
         );
+
+        publishStatusEvent(operation, beforeStatus, OperationStatus.CANCELLED,
+                AuditOperationType.CANCEL_TICKET, OperationRole.OPERATION_MANAGER,
+                operatorId, operatorName, true, null);
 
         return operation;
     }

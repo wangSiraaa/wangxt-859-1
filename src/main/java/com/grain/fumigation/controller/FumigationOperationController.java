@@ -2,14 +2,18 @@ package com.grain.fumigation.controller;
 
 import com.grain.fumigation.dto.*;
 import com.grain.fumigation.entity.FumigationOperation;
+import com.grain.fumigation.entity.StatusSubscription;
+import com.grain.fumigation.enums.OperationRole;
 import com.grain.fumigation.enums.OperationStatus;
 import com.grain.fumigation.service.FumigationOperationService;
+import com.grain.fumigation.service.StatusSubscriptionService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.web.bind.annotation.*;
 
 import javax.servlet.http.HttpServletRequest;
 import javax.validation.Valid;
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/fumigation")
@@ -17,6 +21,9 @@ public class FumigationOperationController {
 
     @Autowired
     private FumigationOperationService operationService;
+
+    @Autowired
+    private StatusSubscriptionService subscriptionService;
 
     private String getClientIp(HttpServletRequest request) {
         String ip = request.getHeader("X-Forwarded-For");
@@ -132,5 +139,61 @@ public class FumigationOperationController {
             HttpServletRequest httpRequest) {
         FumigationOperation operation = operationService.cancelTicket(id, operatorId, operatorName, getClientIp(httpRequest));
         return ApiResponse.success("作业票已取消", operation);
+    }
+
+    @PostMapping("/subscribe")
+    public ApiResponse<StatusSubscription> subscribe(
+            @Valid @RequestBody SubscribeRequest request) {
+        StatusSubscription subscription = subscriptionService.subscribe(request);
+        return ApiResponse.success("订阅成功", subscription);
+    }
+
+    @PostMapping("/unsubscribe/{operationId}")
+    public ApiResponse<Void> unsubscribe(
+            @PathVariable Long operationId,
+            @RequestParam String subscriberId) {
+        subscriptionService.unsubscribe(operationId, subscriberId);
+        return ApiResponse.success("取消订阅成功", null);
+    }
+
+    @GetMapping("/subscriptions/subscriber/{subscriberId}")
+    public ApiResponse<List<StatusSubscription>> getSubscriptionsBySubscriberId(
+            @PathVariable String subscriberId) {
+        List<StatusSubscription> subscriptions = subscriptionService.getSubscriptionsBySubscriberId(subscriberId);
+        return ApiResponse.success(subscriptions);
+    }
+
+    @GetMapping("/subscriptions/operation/{operationId}")
+    public ApiResponse<List<StatusSubscription>> getSubscriptionsByOperationId(
+            @PathVariable Long operationId) {
+        List<StatusSubscription> subscriptions = subscriptionService.getSubscriptionsByOperationId(operationId);
+        return ApiResponse.success(subscriptions);
+    }
+
+    @GetMapping("/todos")
+    public ApiResponse<List<TodoItemVO>> getTodoList(
+            @RequestParam String operatorId,
+            @RequestParam OperationRole role) {
+        List<TodoItemVO> todoList = subscriptionService.getTodoList(operatorId, role);
+        return ApiResponse.success(todoList);
+    }
+
+    @GetMapping("/todos/subscribed/{subscriberId}")
+    public ApiResponse<List<TodoItemVO>> getSubscribedTodoList(
+            @PathVariable String subscriberId) {
+        List<TodoItemVO> todoList = subscriptionService.getSubscribedTodoList(subscriberId);
+        return ApiResponse.success(todoList);
+    }
+
+    @GetMapping("/notifications")
+    public ApiResponse<List<Map<String, Object>>> getNotificationQueue() {
+        List<Map<String, Object>> notifications = subscriptionService.getNotificationQueue();
+        return ApiResponse.success(notifications);
+    }
+
+    @DeleteMapping("/notifications")
+    public ApiResponse<Void> clearNotificationQueue() {
+        subscriptionService.clearNotificationQueue();
+        return ApiResponse.success("通知队列已清空", null);
     }
 }

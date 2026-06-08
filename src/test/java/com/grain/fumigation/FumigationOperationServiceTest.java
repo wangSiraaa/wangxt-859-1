@@ -236,7 +236,7 @@ class FumigationOperationServiceTest {
             operationService.applyPesticide(request, testIp);
         });
 
-        assertEquals("人员未撤离，不能投药！", exception.getMessage());
+        assertEquals("人员未撤离不能投药", exception.getMessage());
     }
 
     @Test
